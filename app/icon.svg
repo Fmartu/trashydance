@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+	<title>TrashyDance</title>
+	<rect x="50" y="50" width="412" height="412" fill="#2b56f5" />
+	<rect x="30" y="30" width="412" height="412" fill="#000000" />
+	<rect x="10" y="10" width="412" height="412" fill="#c5f83b" />
+	<text x="216" y="276" text-anchor="middle" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-weight="900" font-size="160">
+		<tspan fill="#000000">T</tspan>
+		<tspan fill="#2b56f5">D</tspan>
+	</text>
+</svg>

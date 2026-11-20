@@ -1,0 +1,287 @@
+"use client";
+
+import { Paperclip, Send, Smile, X } from "lucide-react";
+import {
+	type ChangeEvent,
+	type KeyboardEvent,
+	useCallback,
+	useRef,
+	useState,
+} from "react";
+import { Button } from "@/components/ui/button";
+import {
+	ALLOWED_MIME_ACCEPT_STRING,
+	ALLOWED_MIME_TYPES_SET,
+	MAX_FILE_SIZE,
+	MAX_MESSAGE_LENGTH,
+	MESSAGE_LENGTH_WARNING_THRESHOLD,
+	TEXTAREA_MAX_HEIGHT_PX,
+} from "@/lib/constants";
+import { useI18n } from "@/lib/i18n/i18n-context";
+import { cn, formatFileSize } from "@/lib/utils";
+import { NorminetteButton } from "./norminette-button";
+
+const EMOJIS = ["👾", "🤖", "🛸", "🚀", "🕳️", "💻", "🧠", "☕", "📝", "⚠️"];
+
+interface FileInfo {
+	fileName: string;
+	fileUrl: string;
+	fileType: string;
+	fileSize: number;
+}
+
+interface MessageInputProps {
+	onSend: (body: string, fileInfo?: FileInfo) => void;
+	conversationId: string;
+	disabled?: boolean;
+	className?: string;
+	isBlackHoleMode?: boolean;
+}
+
+export function MessageInput({
+	onSend,
+	conversationId,
+	disabled,
+	className,
+	isBlackHoleMode,
+}: MessageInputProps) {
+	const [value, setValue] = useState("");
+	const [selectedFile, setSelectedFile] = useState<File | null>(null);
+	const [isUploading, setIsUploading] = useState(false);
+	const [fileError, setFileError] = useState<string | null>(null);
+	const { t } = useI18n();
+	const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	const fileInputRef = useRef<HTMLInputElement>(null);
+
+	const insertEmoji = useCallback((emoji: string) => {
+		const textarea = textareaRef.current;
+		if (!textarea) {
+			setValue((prev) => prev + emoji);
+			return;
+		}
+		const start = textarea.selectionStart;
+		const end = textarea.selectionEnd;
+		const text = textarea.value;
+		const before = text.substring(0, start);
+		const after = text.substring(end, text.length);
+		setValue(before + emoji + after);
+
+		// Focus and position cursor right after the inserted emoji
+		setTimeout(() => {
+			textarea.focus();
+			textarea.setSelectionRange(start + emoji.length, start + emoji.length);
+		}, 0);
+		setShowEmojiPicker(false);
+	}, []);
+
+	const handleInput = useCallback(() => {
+		const el = textareaRef.current;
+		if (el) {
+			el.style.height = "auto";
+			el.style.height = `${Math.min(el.scrollHeight, TEXTAREA_MAX_HEIGHT_PX)}px`;
+		}
+	}, []);
+
+	const handleFileSelect = useCallback((e: ChangeEvent<HTMLInputElement>) => {
+		setFileError(null);
+		const file = e.target.files?.[0];
+		if (!file) return;
+
+		if (file.size > MAX_FILE_SIZE) {
+			setFileError("File size exceeds 10MB limit");
+			return;
+		}
+
+		if (!ALLOWED_MIME_TYPES_SET.has(file.type)) {
+			setFileError("File type not allowed");
+			return;
+		}
+
+		setSelectedFile(file);
+		// Reset the input so the same file can be selected again
+		if (fileInputRef.current) {
+			fileInputRef.current.value = "";
+		}
+	}, []);
+
+	const removeFile = useCallback(() => {
+		setSelectedFile(null);
+		setFileError(null);
+	}, []);
+
+	const handleSend = useCallback(async () => {
+		const trimmed = value.trim();
+		if (!trimmed && !selectedFile) return;
+		if (trimmed.length > MAX_MESSAGE_LENGTH) return;
+		if (isUploading) return;
+
+		let fileInfo: FileInfo | undefined;
+
+		if (selectedFile) {
+			setIsUploading(true);
+			try {
+				const formData = new FormData();
+				formData.append("file", selectedFile);
+				formData.append("conversationId", conversationId);
+
+				const res = await fetch("/api/uploads", {
+					method: "POST",
+					body: formData,
+				});
+
+				if (!res.ok) {
+					const err = await res.json();
+					setFileError(err.error || "Upload failed");
+					setIsUploading(false);
+					return;
+				}
+
+				fileInfo = await res.json();
+			} catch {
+				setFileError("Upload failed");
+				setIsUploading(false);
+				return;
+			} finally {
+				setIsUploading(false);
+			}
+		}
+
+		onSend(trimmed, fileInfo);
+		setValue("");
+		setSelectedFile(null);
+		setFileError(null);
+		if (textareaRef.current) {
+			textareaRef.current.style.height = "auto";
+		}
+	}, [value, selectedFile, isUploading, conversationId, onSend]);
+
+	const handleKeyDown = useCallback(
+		(e: KeyboardEvent<HTMLTextAreaElement>) => {
+			if (e.key === "Enter" && !e.shiftKey) {
+				e.preventDefault();
+				handleSend();
+			}
+		},
+		[handleSend],
+	);
+
+	const charCount = value.length;
+	const nearLimit =
+		charCount > MAX_MESSAGE_LENGTH * MESSAGE_LENGTH_WARNING_THRESHOLD;
+	const canSend =
+		!isUploading && (value.trim().length > 0 || selectedFile !== null);
+
+	return (
+		<div className={cn("flex flex-col gap-2", className)}>
+			{selectedFile && (
+				<div className="flex items-center gap-2 rounded-md border-2 border-border bg-muted px-3 py-2 text-sm">
+					<Paperclip className="size-4 shrink-0 text-muted-foreground" />
+					<span className="truncate flex-1">{selectedFile.name}</span>
+					<span className="shrink-0 text-xs text-muted-foreground">
+						{formatFileSize(selectedFile.size)}
+					</span>
+					<button
+						type="button"
+						onClick={removeFile}
+						className="shrink-0 rounded-sm p-0.5 hover:bg-accent"
+						aria-label="Remove file"
+					>
+						<X className="size-4" />
+					</button>
+				</div>
+			)}
+			{fileError && <p className="text-xs text-destructive">{fileError}</p>}
+			<div className="flex items-end gap-2">
+				<input
+					ref={fileInputRef}
+					type="file"
+					accept={ALLOWED_MIME_ACCEPT_STRING}
+					onChange={handleFileSelect}
+					className="hidden"
+					aria-label="Attach file"
+				/>
+				<Button
+					size="icon"
+					variant="outline"
+					onClick={() => fileInputRef.current?.click()}
+					disabled={disabled || isUploading}
+					aria-label="Attach file"
+					type="button"
+				>
+					<Paperclip className="size-4" />
+				</Button>
+				<div className="relative flex-1">
+					<textarea
+						ref={textareaRef}
+						value={value}
+						onChange={(e) =>
+							setValue(e.target.value.slice(0, MAX_MESSAGE_LENGTH))
+						}
+						onInput={handleInput}
+						onKeyDown={handleKeyDown}
+						placeholder={t("typeMessage")}
+						disabled={disabled || isUploading}
+						rows={1}
+						className={cn(
+							"w-full resize-none rounded-base border-2 border-border bg-card px-3 py-2 pr-16 text-sm shadow-shadow transition-all outline-none placeholder:text-muted-foreground focus:brutal-press-focus disabled:opacity-50",
+							isBlackHoleMode &&
+								"bg-slate-900 text-white placeholder:text-slate-400 border-purple-500/50 focus:ring-1 focus:ring-purple-500 focus:border-purple-500",
+						)}
+					/>
+					<span
+						className={cn(
+							"pointer-events-none absolute right-3 bottom-2.5 text-[10px] font-bold uppercase tracking-wider",
+							charCount >= MAX_MESSAGE_LENGTH
+								? "text-destructive"
+								: nearLimit
+									? "text-accent"
+									: "text-muted-foreground",
+						)}
+					>
+						{charCount}/{MAX_MESSAGE_LENGTH}
+					</span>
+				</div>
+				<NorminetteButton
+					currentText={value}
+					onFormat={setValue}
+					disabled={disabled || isUploading || !value.trim()}
+				/>
+				<div className="relative">
+					<Button
+						size="icon"
+						variant="outline"
+						onClick={() => setShowEmojiPicker((v) => !v)}
+						disabled={disabled || isUploading}
+						aria-label="Insert emoji"
+						type="button"
+					>
+						<Smile className="size-4" />
+					</Button>
+					{showEmojiPicker && (
+						<div className="absolute bottom-12 right-0 z-50 w-48 rounded-base border-4 border-border bg-card p-2 shadow-shadow grid grid-cols-5 gap-2">
+							{EMOJIS.map((emoji) => (
+								<button
+									key={emoji}
+									type="button"
+									onClick={() => insertEmoji(emoji)}
+									className="flex size-7 items-center justify-center rounded-sm text-lg hover:bg-accent transition-all animate-in zoom-in-75 duration-100"
+								>
+									{emoji}
+								</button>
+							))}
+						</div>
+					)}
+				</div>
+				<Button
+					size="icon"
+					onClick={handleSend}
+					disabled={disabled || !canSend}
+					aria-label="Send message"
+				>
+					<Send className="size-4" />
+				</Button>
+			</div>
+		</div>
+	);
+}

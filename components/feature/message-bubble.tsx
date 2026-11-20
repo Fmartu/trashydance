@@ -1,0 +1,376 @@
+"use client";
+
+import {
+	AlertCircle,
+	Check,
+	FileDown,
+	FileSpreadsheet,
+	FileText,
+	ImageIcon,
+	Loader2,
+	Presentation,
+	Video,
+	Zap,
+} from "lucide-react";
+import Image from "next/image";
+import { useEffect, useRef, useState } from "react";
+import { MoulinetteOverlay } from "@/components/feature/moulinette-overlay";
+import { UserAvatar } from "@/components/feature/user-avatar";
+import { RelativeTime } from "@/components/ui/relative-time";
+import { deleteMessage } from "@/lib/actions/conversations";
+import { useI18n } from "@/lib/i18n/i18n-context";
+import { cn, formatFileSize } from "@/lib/utils";
+
+interface MessageBubbleProps {
+	body: string;
+	// number (ms) from the server, ISO string for optimistic messages
+	createdAt: string | number | null;
+	isSelf: boolean;
+	status?: "sending" | "sent" | "error";
+	onRetry?: () => void;
+	fileName?: string;
+	fileUrl?: string;
+	fileType?: string;
+	fileSize?: number;
+	partnerName?: string;
+	partnerImage?: string | null;
+	isBlackHoleMode?: boolean;
+	messageId?: string;
+	onExpired?: (id: string) => void;
+	isAbsorbActive?: boolean;
+}
+
+function getFileIcon(mimeType: string) {
+	if (mimeType.startsWith("image/")) return ImageIcon;
+	if (mimeType.startsWith("video/")) return Video;
+	if (mimeType === "application/pdf") return FileText;
+	if (
+		mimeType === "application/msword" ||
+		mimeType ===
+			"application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	)
+		return FileText;
+	if (
+		mimeType === "application/vnd.ms-excel" ||
+		mimeType ===
+			"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+	)
+		return FileSpreadsheet;
+	if (
+		mimeType === "application/vnd.ms-powerpoint" ||
+		mimeType ===
+			"application/vnd.openxmlformats-officedocument.presentationml.presentation"
+	)
+		return Presentation;
+	return FileDown;
+}
+
+function FilePreview({
+	fileName,
+	fileUrl,
+	fileType,
+	fileSize,
+}: {
+	fileName: string;
+	fileUrl: string;
+	fileType: string;
+	fileSize: number;
+}) {
+	const [fullView, setFullView] = useState(false);
+
+	// Image preview
+	if (fileType.startsWith("image/")) {
+		return (
+			<div className="mb-1">
+				<button
+					type="button"
+					onClick={() => setFullView(!fullView)}
+					className="block"
+				>
+					<Image
+						src={fileUrl}
+						alt={fileName}
+						width={240}
+						height={180}
+						// The uploads route requires the session cookie: skip the
+						// Next image optimizer (it fetches server-side, unauthenticated)
+						unoptimized
+						className={cn(
+							"rounded-base border-2 border-border",
+							fullView
+								? "w-auto h-auto max-w-full"
+								: "max-w-[240px] max-h-[180px]",
+						)}
+						style={{ objectFit: "cover" }}
+					/>
+				</button>
+
+				{fullView && (
+					<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
+						<button
+							type="button"
+							onClick={() => setFullView(false)}
+							className="absolute inset-0"
+							aria-label="Close full size image"
+						/>
+						<Image
+							src={fileUrl}
+							alt={fileName}
+							width={1200}
+							height={900}
+							unoptimized
+							className="relative z-10 max-h-[90vh] max-w-[90vw] rounded-md"
+							style={{ objectFit: "contain" }}
+						/>
+					</div>
+				)}
+			</div>
+		);
+	}
+
+	// Video preview
+	if (fileType.startsWith("video/")) {
+		return (
+			<div className="mb-1">
+				{/* biome-ignore lint/a11y/useMediaCaption: user-uploaded video content */}
+				<video
+					src={fileUrl}
+					controls
+					className="max-w-[280px] max-h-[200px] rounded-md border border-border/20"
+					preload="metadata"
+				/>
+			</div>
+		);
+	}
+
+	// Document download link
+	const Icon = getFileIcon(fileType);
+
+	return (
+		<a
+			href={fileUrl}
+			download={fileName}
+			className="mb-1 flex items-center gap-3 rounded-base border-2 border-border bg-card px-3 py-2 text-sm text-foreground no-underline shadow-brutal-sm transition-all hover:brutal-press-hover"
+		>
+			<span className="flex size-9 shrink-0 items-center justify-center border-2 border-border bg-secondary text-secondary-foreground">
+				<Icon className="size-4" />
+			</span>
+			<div className="flex-1 truncate">
+				<div className="truncate text-xs font-bold uppercase tracking-wide">
+					{fileName}
+				</div>
+				<div className="text-xs text-muted-foreground">
+					{formatFileSize(fileSize)}
+				</div>
+			</div>
+			<FileDown className="size-4 shrink-0 opacity-50" />
+		</a>
+	);
+}
+
+export function MessageBubble({
+	body,
+	createdAt,
+	isSelf,
+	status,
+	onRetry,
+	fileName,
+	fileUrl,
+	fileType,
+	fileSize,
+	partnerName,
+	partnerImage,
+	isBlackHoleMode,
+	messageId,
+	onExpired,
+	isAbsorbActive,
+}: MessageBubbleProps) {
+	const { t } = useI18n();
+	const hasFile = fileName && fileUrl && fileType && fileSize;
+	const [isMoulinetteOpen, setIsMoulinetteOpen] = useState(false);
+
+	const bubbleRef = useRef<HTMLDivElement>(null);
+	const [translation, setTranslation] = useState({ x: 0, y: 0 });
+
+	useEffect(() => {
+		if (isAbsorbActive && bubbleRef.current) {
+			const bubbleEl = bubbleRef.current;
+			const bhEl = document.querySelector(".black-hole-singularity");
+			if (bhEl) {
+				const bubbleRect = bubbleEl.getBoundingClientRect();
+				const bhRect = bhEl.getBoundingClientRect();
+
+				const bubbleCenterX = bubbleRect.left + bubbleRect.width / 2;
+				const bubbleCenterY = bubbleRect.top + bubbleRect.height / 2;
+
+				const bhCenterX = bhRect.left + bhRect.width / 2;
+				const bhCenterY = bhRect.top + bhRect.height / 2;
+
+				setTranslation({
+					x: bhCenterX - bubbleCenterX,
+					y: bhCenterY - bubbleCenterY,
+				});
+			}
+		}
+	}, [isAbsorbActive]);
+
+	const [timeLeft, setTimeLeft] = useState(() => {
+		if (!isBlackHoleMode) return 30;
+		const createdTime =
+			typeof createdAt === "string"
+				? new Date(createdAt).getTime()
+				: typeof createdAt === "number"
+					? createdAt
+					: Date.now();
+		return Math.max(0, 30 - Math.floor((Date.now() - createdTime) / 1000));
+	});
+
+	useEffect(() => {
+		if (!isBlackHoleMode || timeLeft <= 0) return;
+
+		const timer = setInterval(() => {
+			setTimeLeft((prev) => {
+				if (prev <= 1) {
+					clearInterval(timer);
+					return 0;
+				}
+				return prev - 1;
+			});
+		}, 1000);
+
+		return () => clearInterval(timer);
+	}, [isBlackHoleMode, timeLeft]);
+
+	useEffect(() => {
+		if (isBlackHoleMode && timeLeft === 0 && messageId) {
+			if (!messageId.startsWith("temp-")) {
+				deleteMessage(messageId).catch((err) => {
+					console.error("Failed to delete expired message:", err);
+				});
+			}
+			if (onExpired) {
+				onExpired(messageId);
+			}
+		}
+	}, [isBlackHoleMode, timeLeft, messageId, onExpired]);
+
+	if (isBlackHoleMode && timeLeft <= 0) return null;
+
+	return (
+		<>
+			<MoulinetteOverlay
+				isOpen={isMoulinetteOpen}
+				onClose={() => setIsMoulinetteOpen(false)}
+			/>
+
+			<div
+				ref={bubbleRef}
+				className={cn(
+					"flex w-full flex-col group transition-all duration-1000 ease-in-out origin-center",
+					isSelf ? "items-end" : "items-start",
+					isAbsorbActive && "scale-0 opacity-0 pointer-events-none",
+				)}
+				style={
+					isAbsorbActive
+						? {
+								transform: `translate(${translation.x}px, ${translation.y}px) scale(0)`,
+								opacity: 0,
+							}
+						: undefined
+				}
+			>
+				<div className={cn("flex max-w-[75%] items-start gap-2 relative")}>
+					{!isSelf && (
+						<UserAvatar
+							name={partnerName ?? null}
+							image={partnerImage}
+							className="mt-0.5 size-7 border-2 border-border"
+							fallbackClassName="text-[9px] font-bold"
+						/>
+					)}
+					<div
+						className={cn(
+							"min-w-0 rounded-base border-2 border-border px-4 py-2.5 shadow-brutal-sm",
+							isSelf
+								? "bg-main text-main-foreground"
+								: "bg-card text-foreground",
+						)}
+					>
+						{hasFile && (
+							<FilePreview
+								fileName={fileName}
+								fileUrl={fileUrl}
+								fileType={fileType}
+								fileSize={fileSize}
+							/>
+						)}
+
+						{body && (
+							<p className="whitespace-pre-wrap break-words text-sm">{body}</p>
+						)}
+					</div>
+
+					{/* Moulinette button on hover */}
+					<button
+						type="button"
+						onClick={() => setIsMoulinetteOpen(true)}
+						className="opacity-0 group-hover:opacity-100 transition-opacity ml-2 p-1.5 rounded-md bg-card border-2 border-border hover:bg-accent/20 active:scale-95"
+						title="Run through Moulinette"
+						aria-label="Evaluate message with Moulinette"
+					>
+						<Zap className="size-4 text-accent" />
+					</button>
+				</div>
+
+				{isSelf && (
+					<div className="mt-1.5 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+						{createdAt && (
+							<>
+								{isBlackHoleMode ? (
+									<span className="text-destructive font-mono animate-pulse">
+										🕳️ {timeLeft}s
+									</span>
+								) : (
+									<RelativeTime createdAt={createdAt} />
+								)}
+								<span className="text-muted-foreground">•</span>
+							</>
+						)}
+						{status === "sending" && (
+							<Loader2 className="size-3 animate-spin" />
+						)}
+						{status === "sent" && (
+							<>
+								<Check className="size-3" />
+								<span>{t("sentStatus")}</span>
+							</>
+						)}
+						{status === "error" && (
+							<button
+								type="button"
+								onClick={onRetry}
+								className="inline-flex items-center gap-0.5 text-destructive hover:underline"
+								aria-label="Retry sending message"
+							>
+								<AlertCircle className="size-3" />
+								<span>{t("retry")}</span>
+							</button>
+						)}
+					</div>
+				)}
+
+				{(!isSelf || isBlackHoleMode) && !isSelf && createdAt && (
+					<div className="mt-1.5 ml-9 flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+						{isBlackHoleMode ? (
+							<span className="text-destructive font-mono animate-pulse">
+								🕳️ {timeLeft}s
+							</span>
+						) : (
+							<RelativeTime createdAt={createdAt} />
+						)}
+					</div>
+				)}
+			</div>
+		</>
+	);
+}
